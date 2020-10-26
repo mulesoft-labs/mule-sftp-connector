@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:sftp="http://www.mulesoft.org/schema/mule/sftp" xmlns:java="http://www.mulesoft.org/schema/mule/java" xsi:schemaLocation="
+		http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+		http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+		http://www.mulesoft.org/schema/mule/munit-tools  http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/sftp http://www.mulesoft.org/schema/mule/sftp/current/mule-sftp.xsd
+        http://www.mulesoft.org/schema/mule/java http://www.mulesoft.org/schema/mule/java/current/mule-java.xsd">
+
+    <munit:config name="sftp-get-file-information-test-case.xml"/>
+
+    <munit:dynamic-port propertyName="sftp.server.port"/>
+
+    <sftp:config name="config-with-limited-pool-read-info">
+        <sftp:connection username="muletest1" password="muletest1" host="localhost" port="${sftp.server.port}"
+                         workingDir="/" prngAlgorithm="SHA1PRNG">
+            <pooling-profile exhaustedAction="WHEN_EXHAUSTED_WAIT" maxActive="1" maxIdle="1" maxWait="5000"/>
+        </sftp:connection>
+    </sftp:config>
+
+    <munit:before-suite name="startSftpTestServer-get-file-info">
+        <java:invoke-static class="org.mule.extension.sftp.internal.lifecycle.SftpServerLifecycleManager"
+                            method="startSftpServer(String)">
+            <java:args>
+                #[{
+                arg0: ${sftp.server.port},
+                }]
+            </java:args>
+        </java:invoke-static>
+    </munit:before-suite>
+
+    <munit:after-suite name="clearSftpTestServer-get-file-info">
+        <java:invoke-static class="org.mule.extension.sftp.internal.lifecycle.SftpServerLifecycleManager"
+                            method="stopSftpServer()">
+            <java:args>
+                #[{}]
+            </java:args>
+        </java:invoke-static>
+    </munit:after-suite>
+
+    <munit:test name="sftp-get-file-information-using-single-connection"
+                description="Perform a Get file information operation with a pooling profile which allows only 1 active connection">
+        <munit:behavior>
+        	<set-variable variableName="fileName" value="filePath.txt"/>
+            <set-variable variableName="fileContent" value="I just want to impress Mr. Stark"/>
+            <sftp:write config-ref="config-with-limited-pool-read-info" path="#[vars.fileName]">
+                <sftp:content>#[vars.fileContent]</sftp:content>
+            </sftp:write>
+        </munit:behavior>
+        <munit:execution>
+            <sftp:get-file-information config-ref="config-with-limited-pool-read-info" path='#[vars.fileName]'/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert>
+                <munit-tools:that><![CDATA[#[import * from dw::test::Asserts
+                                     ---
+                                    payload must [$.symbolicLink must equalTo(false),
+                                    $.regularFile must equalTo(true),
+                                    $.directory must equalTo(false),
+                                    $.name must equalTo(vars.filename),
+                                    $.path must equalTo('/' ++ vars.filename),
+                                    $.size must equalTo(32)
+                                    ]]]]>
+                </munit-tools:that>
+            </munit-tools:assert>
+            <munit-tools:assert-that doc:name="Assert that" expression="#[payload.timestamp]" is="#[MunitTools::notNullValue()]" message="Payload timestamp is not empty" />
+        </munit:validation>
+    </munit:test>
+    
+    <munit:test name="sftp-get-file-information-with-directory-using-single-connection"
+                description="Perform a Get file information operation with a pooling profile which allows only 1 active connection">
+        <munit:behavior>
+        	<set-variable variableName="dirName" value="test"/>
+            <sftp:create-directory doc:name="Create directory" config-ref="config-with-limited-pool-read-info" directoryPath="#[vars.dirName]"/>
+        </munit:behavior>
+        <munit:execution>
+            <sftp:get-file-information config-ref="config-with-limited-pool-read-info" path='#[vars.dirName]'/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert>
+                <munit-tools:that><![CDATA[#[import * from dw::test::Asserts
+                                     ---
+                                    payload must [$.symbolicLink must equalTo(false),
+                                    $.regularFile must equalTo(false),
+                                    $.directory must equalTo(true),
+                                    $.name must equalTo(vars.dirName),
+                                    $.path must equalTo('/' ++ vars.dirName),
+                                    $.size must equalTo(0)
+                                    ]]]]>
+                </munit-tools:that>
+            </munit-tools:assert>
+            <munit-tools:assert-that doc:name="Assert that" expression="#[payload.timestamp]" is="#[MunitTools::notNullValue()]" message="Payload timestamp is not empty" />
+        </munit:validation>
+    </munit:test>
+    
+    <munit:test name="sftp-get-file-information-with-null-path-using-single-connection"
+                description="Perform a Get file information operation with a pooling profile which allows only 1 active connection" expectedErrorType="SFTP:ILLEGAL_PATH">
+        <munit:execution>
+            <sftp:get-file-information config-ref="config-with-limited-pool-read-info" path='#[null]'/>
+        </munit:execution>
+    </munit:test>
+    
+    <munit:test name="sftp-get-file-information-with-empty-path-using-single-connection"
+                description="Perform a Get file information operation with a pooling profile which allows only 1 active connection" expectedErrorType="SFTP:ILLEGAL_PATH">
+        <munit:execution>
+            <sftp:get-file-information config-ref="config-with-limited-pool-read-info" path='#[""]'/>
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="sftp-invalid-path-get-file-information-using-single-connection"
+                description="Perform a Get file information operation for non-existing file" expectedErrorType="SFTP:ILLEGAL_PATH">
+        <munit:behavior >
+            <set-variable variableName="fileName" value="not-existing-filePath.txt"/>
+        </munit:behavior>
+        <munit:execution>
+            <sftp:get-file-information config-ref="config-with-limited-pool-read-info" path='#[vars.fileName]'/>
+        </munit:execution>
+    </munit:test>
+</mule>

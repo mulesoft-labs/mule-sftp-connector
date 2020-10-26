@@ -12,25 +12,20 @@ import static org.mule.runtime.api.meta.model.display.PathModel.Type.FILE;
 import static org.mule.runtime.core.api.util.StringUtils.isBlank;
 import static org.mule.runtime.extension.api.annotation.param.MediaType.ANY;
 import static org.mule.runtime.extension.api.annotation.param.display.Placement.ADVANCED_TAB;
-import org.mule.extension.file.common.api.BaseFileSystemOperations;
-import org.mule.extension.file.common.api.FileAttributes;
-import org.mule.extension.file.common.api.FileConnectorConfig;
-import org.mule.extension.file.common.api.FileSystem;
-import org.mule.extension.file.common.api.FileWriteMode;
-import org.mule.extension.file.common.api.exceptions.FileCopyErrorTypeProvider;
-import org.mule.extension.file.common.api.exceptions.FileDeleteErrorTypeProvider;
-import org.mule.extension.file.common.api.exceptions.FileListErrorTypeProvider;
-import org.mule.extension.file.common.api.exceptions.FileReadErrorTypeProvider;
-import org.mule.extension.file.common.api.exceptions.FileRenameErrorTypeProvider;
-import org.mule.extension.file.common.api.exceptions.FileWriteErrorTypeProvider;
-import org.mule.extension.file.common.api.exceptions.IllegalContentException;
-import org.mule.extension.file.common.api.exceptions.IllegalPathException;
+
+import java.io.InputStream;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
+
+import org.mule.extension.file.common.api.*;
+import org.mule.extension.file.common.api.exceptions.*;
 import org.mule.extension.file.common.api.matcher.FileMatcher;
 import org.mule.extension.file.common.api.matcher.NullFilePayloadPredicate;
 import org.mule.extension.sftp.api.SftpFileAttributes;
 import org.mule.extension.sftp.api.SftpFileMatcher;
 import org.mule.extension.sftp.internal.connection.SftpFileSystem;
-import org.mule.runtime.api.message.Message;
+import org.mule.runtime.core.api.util.StringUtils;
 import org.mule.runtime.extension.api.annotation.error.Throws;
 import org.mule.runtime.extension.api.annotation.param.Config;
 import org.mule.runtime.extension.api.annotation.param.ConfigOverride;
@@ -42,14 +37,10 @@ import org.mule.runtime.extension.api.annotation.param.display.DisplayName;
 import org.mule.runtime.extension.api.annotation.param.display.Path;
 import org.mule.runtime.extension.api.annotation.param.display.Placement;
 import org.mule.runtime.extension.api.annotation.param.display.Summary;
+import org.mule.runtime.extension.api.exception.ModuleException;
 import org.mule.runtime.extension.api.runtime.operation.Result;
 import org.mule.runtime.extension.api.runtime.streaming.PagingProvider;
 import org.mule.runtime.extension.api.runtime.streaming.StreamingHelper;
-
-import java.io.InputStream;
-import java.util.List;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Predicate;
 
 /**
  * Ftp connector operations
@@ -110,9 +101,9 @@ public final class SftpOperations extends BaseFileSystemOperations {
    * system, its behavior might change depending on the mounted drive and the operation system on which mule is running. Take that
    * into consideration before blindly relying on this lock.
    * <p>
-   * This method also makes a best effort to determine the mime type of the file being read. The file's extension will
-   * be used to make an educated guess on the file's mime type. The user also has the chance to force the output encoding and
-   * mimeType through the {@code outputEncoding} and {@code outputMimeType} optional parameters.
+   * This method also makes a best effort to determine the mime type of the file being read. The file's extension will be used to
+   * make an educated guess on the file's mime type. The user also has the chance to force the output encoding and mimeType
+   * through the {@code outputEncoding} and {@code outputMimeType} optional parameters.
    *
    * @param config the config that is parameterizing this operation
    * @param fileSystem a reference to the host {@link FileSystem}
@@ -139,6 +130,37 @@ public final class SftpOperations extends BaseFileSystemOperations {
         doRead(config, fileSystem, path, lock,
                config.getTimeBetweenSizeCheckInMillis(timeBetweenSizeCheck, timeBetweenSizeCheckUnit).orElse(null));
     return (Result<InputStream, SftpFileAttributes>) result;
+  }
+
+  /**
+   * Obtains the metadata of a file at a given path. The operation itself returns a {@link Message} which payload is the metadata
+   * representing as a {@link SftpFileAttributes} object.
+   * <p>
+   * There is no lock placed on the file while reading its attributes.
+   * <p>
+   *
+   * @param config the config that is parameterizing this operation
+   * @param fileSystem a reference to the host {@link FileSystem}
+   * @param path the path to the file to be read
+   * @return the file's metadata as a {@link SftpFileAttributes} instance
+   * @throws IllegalArgumentException if the file at the given path doesn't exist
+   */
+  @Summary("Obtains the metadata of a file at a given path")
+  @Throws(FileReadErrorTypeProvider.class)
+  @MediaType(value = ANY, strict = false)
+  public Result<SftpFileAttributes, Void> getFileInformation(@Config FileConnectorConfig config,
+                                                             @Connection SftpFileSystem fileSystem,
+                                                             @DisplayName("File Path") @Path(type = FILE,
+                                                                 location = EXTERNAL) String path) {
+    if (StringUtils.isBlank(path)) {
+      throw new ModuleException(String.format("Illegal path specified."), FileError.ILLEGAL_PATH);
+    }
+    SftpFileAttributes attributes = fileSystem.readFileAttributes(path);
+    if (attributes == null) {
+      throw new ModuleException(String.format("Illegal path specified: %s", path), FileError.ILLEGAL_PATH);
+    }
+
+    return Result.<SftpFileAttributes, Void>builder().output(attributes).build();
   }
 
   /**
@@ -185,8 +207,8 @@ public final class SftpOperations extends BaseFileSystemOperations {
    * Copies the file at the {@code sourcePath} into the {@code targetPath}.
    * <p>
    * If {@code targetPath} doesn't exist, and neither does its parent, then an attempt will be made to create depending on the
-   * value of the {@code createParentFolder} argument. If such argument is {@false}, then a {@code SFTP:ILLEGAL_PATH} will
-   * be thrown.
+   * value of the {@code createParentFolder} argument. If such argument is {@false}, then a {@code SFTP:ILLEGAL_PATH} will be
+   * thrown.
    * <p>
    * If the target file already exists, then it will be overwritten if the {@code overwrite} argument is {@code true}. Otherwise,
    * {@code SFTP:FILE_ALREADY_EXISTS} error will be thrown.
@@ -217,8 +239,8 @@ public final class SftpOperations extends BaseFileSystemOperations {
    * Moves the file at the {@code sourcePath} into the {@code targetPath}.
    * <p>
    * If {@code targetPath} doesn't exist, and neither does its parent, then an attempt will be made to create depending on the
-   * value of the {@code createParentFolder} argument. If such argument is {@false}, then a {@code SFTP:ILLEGAL_PATH} will
-   * be thrown.
+   * value of the {@code createParentFolder} argument. If such argument is {@false}, then a {@code SFTP:ILLEGAL_PATH} will be
+   * thrown.
    * <p>
    * If the target file already exists, then it will be overwritten if the {@code overwrite} argument is {@code true}. Otherwise,
    * {@code SFTP:FILE_ALREADY_EXISTS} error will be thrown.
@@ -262,8 +284,8 @@ public final class SftpOperations extends BaseFileSystemOperations {
   /**
    * Renames the file pointed by {@code path} to the name provided on the {@code to} parameter
    * <p>
-   * {@code to} argument should not contain any path separator. {@code SFTP:ILLEGAL_PATH} will be thrown if this
-   * precondition is not honored.
+   * {@code to} argument should not contain any path separator. {@code SFTP:ILLEGAL_PATH} will be thrown if this precondition is
+   * not honored.
    *
    * @param fileSystem a reference to the host {@link FileSystem}
    * @param path the path to the file to be renamed
